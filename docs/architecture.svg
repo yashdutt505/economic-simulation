@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="900" viewBox="0 0 1200 900" role="img" aria-labelledby="title desc">
+  <title id="title">Economic Simulation — current architecture and tick flow</title>
+  <desc id="desc">Browser sends controls and polls the Node server. Node launches the C++ engine and reads JSON tick records. C++ loads and saves a checkpoint. A tick pays wages, produces one good, buys and consumes it, then saves state and reports.</desc>
+  <defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="4" orient="auto"><path d="M0 0L8 4L0 8" fill="none" stroke="#60856e" stroke-width="1.5"/></marker></defs>
+  <rect width="1200" height="900" fill="#f5f6f1"/>
+  <g font-family="Segoe UI,Arial,sans-serif" fill="#263c30">
+    <text x="60" y="57" font-size="12" letter-spacing="3" fill="#60856e">ECONOMIC SIMULATION / VERSION 0.1</text>
+    <text x="60" y="108" font-size="35" font-weight="600">A small engine. A visible economy.</text>
+    <text x="60" y="141" font-size="15" fill="#778675">Current implementation: two entities, one good, fixed wage and price.</text>
+    <text x="60" y="195" font-size="12" font-weight="600" letter-spacing="2">01 / SOFTWARE ARCHITECTURE</text>
+    <g fill="#fff" stroke="#d2ddce" stroke-width="1.5">
+      <rect x="60" y="222" width="285" height="140" rx="12"/>
+      <rect x="455" y="222" width="285" height="140" rx="12"/>
+      <rect x="850" y="222" width="290" height="140" rx="12"/>
+      <rect x="850" y="407" width="290" height="95" rx="12"/>
+    </g>
+    <text x="82" y="257" font-size="20" font-weight="600">Browser dashboard</text>
+    <text x="82" y="285" font-size="13" fill="#71826b">HTML + CSS + JavaScript</text>
+    <text x="82" y="313" font-size="13" fill="#71826b">Balances, tick phases, activity</text>
+    <text x="82" y="337" font-size="13" fill="#71826b">http://localhost:3000</text>
+    <text x="477" y="257" font-size="20" font-weight="600">Node.js server</text>
+    <text x="477" y="285" font-size="13" fill="#71826b">Serve files + local HTTP API</text>
+    <text x="477" y="313" font-size="13" fill="#71826b">Run / pause / single tick</text>
+    <text x="477" y="337" font-size="13" fill="#71826b">Keep recent tick records in memory</text>
+    <text x="872" y="257" font-size="20" font-weight="600">C++ engine</text>
+    <text x="872" y="285" font-size="13" fill="#71826b">src/main.cpp → economy executable</text>
+    <text x="872" y="313" font-size="13" fill="#71826b">Own entity state + execute rules</text>
+    <text x="872" y="337" font-size="13" fill="#71826b">Save first, then emit a JSON tick</text>
+    <text x="872" y="442" font-size="18" font-weight="600">Checkpoint file</text>
+    <text x="872" y="472" font-size="13" fill="#71826b">Load on start · Replace after each tick</text>
+    <g stroke="#60856e" stroke-width="1.5" fill="none" marker-end="url(#arrow)">
+      <path d="M345 269H451"/><path d="M455 319H349"/>
+      <path d="M740 269H846"/><path d="M850 319H744"/>
+      <path d="M958 362V403"/><path d="M1034 407V366"/>
+    </g>
+    <g font-size="10" text-anchor="middle" fill="#60856e">
+      <text x="400" y="253">Controls + poll</text><text x="400" y="343">State JSON</text>
+      <text x="794" y="253">Child process</text><text x="794" y="343">JSON stdout</text>
+      <text x="929" y="389">Save</text><text x="1060" y="389">Load</text>
+    </g>
+    <text x="60" y="415" font-size="14" font-weight="600">The dashboard observes; C++ simulates.</text>
+    <text x="60" y="443" font-size="13" fill="#71826b">Closing the browser does not stop the worker. Stopping Node stops its worker.</text>
+    <text x="60" y="470" font-size="13" fill="#71826b">Standalone C++ can also run in Docker with a persistent volume.</text>
+    <path d="M60 535H1140" stroke="#d5dfd0"/>
+    <text x="60" y="578" font-size="12" font-weight="600" letter-spacing="2">02 / ONE SIMULATION TICK</text>
+    <g fill="#edf1e7" stroke="#d2ddce" stroke-width="1.5">
+      <rect x="60" y="608" width="220" height="165" rx="12"/>
+      <rect x="347" y="608" width="220" height="165" rx="12"/>
+      <rect x="634" y="608" width="220" height="165" rx="12"/>
+      <rect x="920" y="608" width="220" height="165" rx="12"/>
+    </g>
+    <g font-size="16" font-weight="600">
+      <text x="79" y="643">1. Starting state</text><text x="366" y="643">2. Work + production</text>
+      <text x="653" y="643">3. Buy + consume</text><text x="939" y="643">4. Commit + report</text>
+    </g>
+    <g font-size="13" fill="#64785c">
+      <text x="79" y="681">Household: 100 money</text><text x="79" y="708">Firm: 100 money</text><text x="79" y="735">Inventory: 0 goods</text>
+      <text x="366" y="681">Firm pays wage: 10</text><text x="366" y="708">Household: 110 · Firm: 90</text><text x="366" y="735">Produce 1 → Inventory: 1</text>
+      <text x="653" y="681">Household pays price: 10</text><text x="653" y="708">Household: 100 · Firm: 100</text><text x="653" y="735">Consume 1 → Inventory: 0</text>
+      <text x="939" y="681">Increment tick counter</text><text x="939" y="708">Save checkpoint</text><text x="939" y="735">Emit tick → Wait → Repeat</text>
+    </g>
+    <g stroke="#60856e" stroke-width="1.5" fill="none" marker-end="url(#arrow)"><path d="M280 689H340"/><path d="M567 689H627"/><path d="M854 689H913"/></g>
+    <text x="60" y="821" font-size="14" font-weight="600">Total money = 200 at every stage. Wage = price, so balances return to 100.</text>
+    <text x="60" y="850" font-size="12" fill="#829077">Work requires firm money ≥ 10. Purchase requires inventory &gt; 0 and household money ≥ 10.</text>
+    <text x="60" y="875" font-size="12" fill="#829077">No banks, government, market pricing, external shocks, or cloud deployment yet.</text>
+  </g>
+</svg>

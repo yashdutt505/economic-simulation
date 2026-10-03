@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Economic Simulation · Observatory</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <main>
+    <header><a class="brand" href="/">ES<span>Economic Simulation</span></a><span class="version">EXPERIMENT 001 / LOCAL</span></header>
+    <section class="intro"><div><p class="eyebrow">THE ECONOMY, ONE TICK AT A TIME</p><h1>A small world.<br>A visible economy.</h1><p class="description">One household. One firm. One good. Watch labor, money, and consumption move through a minimal C++ economy.</p></div><div class="status-box"><span class="status-dot" id="dot"></span><span id="status" role="status">Connecting</span><p id="clock">Waiting for engine state</p></div></section>
+    <section class="toolbar" aria-label="Simulation controls"><div class="control-buttons"><button id="run" class="primary">Run simulation <span>↗</span></button><button id="pause">Pause</button><button id="step">Single tick</button></div><label>Tick interval <select id="interval"><option value="1000">1 second</option><option value="2000">2 seconds</option><option value="5000">5 seconds</option><option value="100">0.1 second</option></select></label></section>
+    <p id="error" class="error" role="alert" hidden></p>
+    <section class="metrics" aria-label="Economy summary"><article><p>Completed ticks</p><strong id="tick">0</strong><small>Resumes from saved state</small></article><article><p>Money in the economy</p><strong id="total">200 <span>units</span></strong><small id="conservation">Conserved across transfers</small></article><article><p>Goods consumed</p><strong id="consumed">0</strong><small>Observed in this server session</small></article><article><p>Firm inventory</p><strong id="inventory">0</strong><small>Goods available after trade</small></article></section>
+    <section class="world"><div class="section-heading"><h2>The two entities</h2><span>STATE AFTER THE LATEST TICK</span></div><div class="entities"><article class="entity household"><div class="entity-top"><span class="entity-icon">H</span><span class="tag">HOUSEHOLD / 01</span></div><h3>The household</h3><p>Works, earns a wage, buys one good.</p><div class="balance"><strong id="household">100</strong><span>money units</span></div><div class="entity-foot">Wage received <b>10 / tick when employed</b></div></article><div class="relations"><div>LABOR <span>→</span></div><div><span>←</span> WAGE · 10</div><div>PAYMENT · 10 <span>→</span></div><div><span>←</span> ONE GOOD</div></div><article class="entity firm"><div class="entity-top"><span class="entity-icon">F</span><span class="tag">FIRM / 01</span></div><h3>The firm</h3><p>Pays for labor, produces, sells one good.</p><div class="balance"><strong id="firm">100</strong><span>money units</span></div><div class="entity-foot">Sale price <b>10 / good</b></div></article></div></section>
+    <section class="tick-section"><div class="section-heading"><h2>Inside the latest tick</h2><span id="latest-tick">NO TICK OBSERVED YET</span></div><div class="phases"><article><span class="phase-number">01</span><h3>Before work</h3><p id="before">Step or run to inspect a tick.</p></article><article><span class="phase-number">02</span><h3>Wage + production</h3><p id="work">Firm pays 10, produces one good.</p></article><article><span class="phase-number">03</span><h3>Purchase + consumption</h3><p id="trade">Household pays 10, consumes one good.</p></article></div><p class="note">Why do balances stay at 100? The wage and price are both 10. Money moves during each tick, then returns to its starting distribution. This is our baseline for adding new behavior.</p></section>
+    <section class="activity"><div class="section-heading"><h2>Recent activity</h2><span>LAST 20 OBSERVED TICKS</span></div><div class="table-wrap"><table><thead><tr><th>Tick</th><th>Household</th><th>Firm</th><th>Produced</th><th>Consumed</th><th>Inventory</th></tr></thead><tbody id="history"><tr><td colspan="6" class="empty">No ticks yet. Try Single tick to see the first exchange.</td></tr></tbody></table></div></section>
+    <details><summary>How the project fits together <span>+</span></summary><img src="/architecture.svg" alt="Architecture: browser dashboard polls a Node server, which controls the C++ engine; the engine saves a checkpoint and emits tick records. Each tick pays wages, produces, trades, and consumes."></details>
+    <footer><span>C++ owns the economy. The dashboard observes it.</span><span>v0.1 · A deliberately small starting point</span></footer>
+  </main>
+</body>
+</html>
