@@ -101,4 +101,4 @@ HTTP controls. Temporary checkpoints are isolated from dashboard state.
 ordered processes. Add one behavior at a time, checking cash and inventory after
 each change. A useful next step is a configurable wage or price, followed by a
 second household. External events, multiple goods, markets, APIs, and a UI can
-come after the basic model is working.
+be expanded as the basic model grows.

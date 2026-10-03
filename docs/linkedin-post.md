@@ -15,7 +15,9 @@ My plan is to build it step by step: add a behavior, observe what changes, and u
 
 Next up: more entities and different relationships between them.
 
-I'll share the code and progress as the project develops.
+The code is public: https://github.com/yashdutt505/economic-simulation
+
+I'll share progress as the project develops.
 
 What would you add first: another household, variable prices, or an external event?
 
