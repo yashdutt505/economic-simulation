@@ -4,35 +4,46 @@ Start with `src/main.cpp`. It contains the complete economic model and the
 command-line engine. Everything in `dashboard/` observes or controls that engine.
 There is no second simulation written in JavaScript.
 
-## 1. The model before the syntax
+## 1. The current model and order of operations
 
-There are two entities: a household and a firm. Each initially has 100 money
-units. The firm initially has zero goods. A tick is one complete economic cycle;
-it does not yet represent a day, month, or year.
+One household and one firm start with 100 money units each. Household stock is
+zero and its desired stock (needs) is 2. The firm begins with zero inventory.
+The rules are fixed C++ constants: wage 10, price 12, batch size 10, and inventory
+threshold 5. A tick does not yet represent a defined calendar period.
 
-One tick executes these steps in order:
+1. **Work and production:** if firm inventory is below 5 and the firm can pay 10,
+   transfer that wage to the household and produce a batch of 10 goods.
+2. **Buying:** buy at most one good for 12 if firm inventory is positive,
+   household cash is sufficient, and household stock is below its target.
+3. **Consumption:** consume one stored good if available; otherwise record an
+   unmet need. Stock must never become negative.
+4. **Commit:** increment the tick, save the final post-consumption state, report,
+   then wait before the next tick.
 
-1. If the firm can afford a wage of 10, it pays the household and produces one good.
-2. If a good is available and the household can afford its price of 10, the
-   household pays the firm and immediately consumes one good.
-3. The engine increments the tick counter, saves state if requested, and emits a record.
-4. The engine waits before the next tick, unless the requested run has finished.
+| First tick stage | Household money | Firm money | Firm inventory | Household stock |
+| --- | ---: | ---: | ---: | ---: |
+| Before work | 100 | 100 | 0 | 0 |
+| After wage and batch | 110 | 90 | 10 | 0 |
+| After buying | 98 | 102 | 9 | 1 |
+| After consumption | 98 | 102 | 9 | 0 |
 
-| Stage | Household money | Firm money | Firm inventory |
-| --- | ---: | ---: | ---: |
-| Before work | 100 | 100 | 0 |
-| After wage and production | 110 | 90 | 1 |
-| After purchase and consumption | 100 | 100 | 0 |
+Production is checked before buying. Inventory exactly 5 does not trigger a batch;
+inventory 4 does. Adding 10 can bring inventory above the threshold: 5 is a trigger,
+not a storage capacity. Wages are paid only on batch-production ticks, not every tick.
 
-The total money is always 200 because both financial operations transfer money.
-Production creates a good; consumption removes it. Equal wages and prices make
-the default economy repeat exactly. The tick count and amount of observed activity
-increase even though the final balances stay constant. This is intentional:
-it gives us a small, deterministic starting point to extend.
+From a fresh start, batches occur on ticks 1 and 7. After 10 purchases the household
+has no money and the firm holds 200 money units and 10 unsold goods. On tick 11,
+no production, purchase, or consumption succeeds. Unmet needs continue accumulating.
+This is the intended consequence of these rules, not an exception or negative stock.
 
-There is no explicit labor inventory, household food storage, utility, debt,
-profit calculation, bankruptcy, price discovery, random event, or calendar yet.
-The household's work is implicit in the successful wage/production operation.
+Money is conserved. Goods accounting is: final firm inventory + household stock
+= previous inventory + stock + produced quantity - consumed quantity. Purchases
+transfer goods rather than create or destroy them. Buying one and consuming one
+each tick means an initially empty household cannot build its target buffer of 2.
+
+The wage of 10 buys labor for an entire batch of 10, so its labor cost per produced
+unit is 1 in this simplified model. Price minus wage is not the per-unit profit.
+The model has no materials, machines, other costs, dividends, or profit accounting.
 
 ## 2. Headers and platform branches
 
@@ -92,7 +103,11 @@ report. Intermediate activity from such a tick may not appear in session history
 ## 4. Entity structs
 
 ```cpp
-struct Household { long long money = 100; };
+struct Household {
+    long long money = 100;
+    long long stock = 0;
+    long long needs = 2; // Target stock, not goods consumed per tick.
+};
 struct Firm { long long money = 100; long long inventory = 0; };
 ```
 
@@ -106,19 +121,26 @@ as a cent or paise without needing fractional arithmetic.
 
 `= 100` and `= 0` are default member initializers: constructing an entity without
 overrides gives it these values. `household.money` accesses a member with the dot
-operator. `firm.inventory` counts goods currently held by the firm.
+operator. `firm.inventory` counts goods currently held by the firm;
+`household.stock` counts goods it owns. `household.needs` is the target stock
+used in the buying decision. It does not increase over time or represent hunger.
 
 ## 5. TickResult: observing intermediate operations
 
 `TickResult` holds what happened during one tick:
 
-- `produced` and `consumed` say whether those operations succeeded.
+- `produced` is an integer quantity (0 or 10), not a Boolean.
+- `purchased` and `consumed` record separate one-unit actions.
+- `unmet_need` records inability to consume; it is not inability to buy if stock exists.
+- Stock before and after consumption exposes the final phase.
+- `household_stock_before_trade` and `household_stock_after_trade` expose the stock movement.
 - The `*_before` fields capture the state at the beginning.
 - The `*_after_work` fields capture the state after wages and production.
 
 It does not own the lasting economy state. It is a record returned by `step()`
 so we can inspect movements that final balances alone hide. `bool` represents
-true or false; the report converts it to 1 or 0.
+true or false; the report converts Boolean actions to 1 or 0 and reports
+production as the actual quantity.
 
 ## 6. Economy and step(): the actual economic rules
 
@@ -140,37 +162,52 @@ First, it checks whether incrementing `tick` would overflow. If the counter is
 already at `std::numeric_limits<long long>::max()`, it throws an exception before
 changing any state. That prevents undefined signed integer overflow.
 
-`const long long wage = 10` and `price = 10` create constants for this step.
+`wage = 10`, `price = 12`, `production_batch = 10` and
+`production_threshold = 5` are namespace-level constants shared by ticking
+and reporting.
 `const` prevents accidentally modifying these variables. A fresh `TickResult`
 captures the original balances and inventory before any transfers.
 
 The employment/production block is:
 
 ```cpp
-if (firm.money >= wage) {
+if (firm.money >= wage && firm.inventory < production_threshold) {
+    // The source also guards inventory addition against the numeric limit.
     firm.money -= wage;
     household.money += wage;
-    ++firm.inventory;
-    result.produced = true;
+    firm.inventory += production_batch;
+    result.produced = production_batch;
 }
 ```
 
 `>=` tests affordability. `-=` subtracts from an existing variable; `+=` adds
 to one. `++` adds one. The firm cannot pay a wage it cannot afford. A successful
-payment also produces exactly one good. Wages and production are coupled in this
+payment also produces exactly one batch of 10 goods. Wages and production are coupled in this
 first model. Then the function captures the intermediate state for the dashboard.
 
 The trade condition is:
 
 ```cpp
-const bool traded = firm.inventory > 0 && household.money >= price;
+const bool traded = firm.inventory > 0
+    && household.money >= price
+    && household.needs > household.stock;
 ```
 
-`&&` means both conditions must be true: a good exists and the household can pay.
+`&&` means all three conditions must be true: a good exists, the household can
+pay, and its stock is below the target.
 C++ evaluates it left to right, and skips the right condition if the left one is
-false. If the trade succeeds, the household loses 10, the firm gains 10, and
-`--firm.inventory` removes one good. That removal stands for immediate consumption;
-the household does not retain a separate goods stock.
+false. If the trade succeeds, the household loses 12, the firm gains 12, and
+`--firm.inventory` removes one good from the firm, while `++household.stock`
+adds that same good to the household. This is a transfer of ownership, not
+consumption. `result.purchased = traded` records a purchase. After buying,
+consumption checks `household.stock > 0` before decrementing it. It marks
+`result.consumed` only on success and `result.unmet_need` on failure.
+The before/after stock fields are populated whether consumption succeeds or not.
+The unconditional `stock--` in the first attempt would have produced negative
+stock and incorrectly reported consumption when the household ran out of goods.
+
+`total_money` is initialized to 200, recalculated after a tick, and recomputed
+after loading. It is not serialized because it is derived from the two balances.
 
 Finally, `++tick` advances simulated time even if no work or trade succeeded.
 The function stores the trade outcome and returns the `TickResult` by value.
@@ -178,7 +215,8 @@ The function stores the trade outcome and returns the `TickResult` by value.
 For example, a valid checkpoint with household money 200, firm money 0, and
 inventory 0 stalls economically: no wages or goods can be produced, and there
 is nothing to buy. Ticks still advance. If the same firm has one stored good,
-the household can buy it, giving the firm enough money to pay a wage next tick.
+the household can buy it if it is below its target, giving the firm enough money
+to pay a wage next tick. A household already at its target does not buy.
 These alternate states are covered by the integration checks.
 
 ## 7. load(): restoring and validating state
@@ -200,11 +238,14 @@ for a new checkpoint.
 The file format is deliberately simple:
 
 ```text
-economy-v1 5 100 100 0
+economy-v2 5 130 70 3 2 2
 ```
 
 These fields are version, completed tick, household money, firm money, and
-firm inventory. Spaces and line breaks delimit fields.
+firm inventory, household stock, and household needs. Spaces and line breaks
+delimit fields. Existing `economy-v1` files still load their original five fields,
+with stock initialized to 0 and needs to 2. The next save upgrades to v2. V1
+never recorded stock, so it cannot restore goods from earlier experimental runs.
 
 `input >> value` extracts and converts the next field. Extraction failures make
 the stream test false. The parser loads into a temporary `Economy loaded`,
@@ -213,11 +254,17 @@ then checks the format version, unexpected trailing fields, and state invariants
 - Tick is nonnegative.
 - Both balances are nonnegative and sum to 200.
 - Household money is at most 200.
-- Inventory is between 0 and 200.
+- Inventory, household stock, and needs are nonnegative and at most
+  9,007,199,254,740,991 (JavaScript's maximum exact integer).
 
-The inventory ceiling is a conservative validation limit for this tiny version,
-not a universal economic rule. If production/storage rules expand, this bound
-and the money validation assumptions must evolve.
+The old inventory ceiling of 200 was removed: with stored goods and interrupted
+trade, inventory may exceed it. The new ceiling keeps JSON numbers exact in
+JavaScript. `step()` checks space for the full batch before producing or transferring
+a wage, and buying can increment stock safely because stock must be below needs.
+V2 already stores stock and target, so its format remains unchanged. Saved stock
+is the final post-consumption value. Fixed rule constants are not checkpointed;
+changing them changes the behavior of a resumed economy.
+Stock above the target is valid after a target change; it simply prevents buying.
 
 Only after validation does `economy = loaded` replace the running state. This
 prevents a partially parsed checkpoint from partially modifying the economy.
@@ -249,13 +296,14 @@ Without `--json`, it prints the original human-readable status line. With
 `--json`, it prints one JSON object per line, often called newline-delimited JSON.
 
 ```json
-{"tick":"1","household_money":100,"firm_money":100,"inventory":0,"produced":1,"consumed":1,"before":{"household_money":100,"firm_money":100,"inventory":0},"after_work":{"household_money":110,"firm_money":90,"inventory":1}}
+{"tick":"1","household_money":98,"firm_money":102,"inventory":9,"household_stock":0,"household_needs":2,"produced":10,"purchased":1,"consumed":1,"unmet_need":0,"wage":10,"price":12,"production_batch":10,"production_threshold":5,"total_money":200,"before":{"household_money":100,"firm_money":100,"inventory":0,"household_stock":0},"after_work":{"household_money":110,"firm_money":90,"inventory":10,"household_stock":0},"after_trade":{"household_money":98,"firm_money":102,"inventory":9,"household_stock":1},"after_consumption":{"household_stock":0},"before_consumption":{"household_stock":1}}
 ```
 
 The tick number is a JSON string: JavaScript's normal `Number` cannot precisely
 represent every 64-bit integer. The browser uses `BigInt` to format this string
-without losing precision. Balances and inventory are bounded small integers and
-can be ordinary JSON numbers.
+without losing precision. Balances are small integers; goods counts are bounded by JavaScript's safe integer
+limit. They can be ordinary JSON numbers. `before`, `after_work`, and
+`after_trade`, `before_consumption`, and `after_consumption` show each phase; top-level fields hold the final tick state.
 
 The manual JSON construction is safe here because the fields are numeric or a
 numeric tick string, with no arbitrary text requiring JSON escaping. If entities
@@ -338,7 +386,9 @@ mode uses `--forever` and the selected delay. Both use `--state` and `--json`.
 There is one worker at a time. Node does not calculate wages, production, or trade.
 
 As stdout arrives, the server parses each JSON record, updates the snapshot,
-counts observed consumption, and retains at most 200 records. It captures a
+counts observed purchases and consumption separately, and retains at most 200 records.
+It also checks that the engine emits the new stock model fields; an old binary
+produces a visible rebuild message rather than silently displaying stale semantics. It captures a
 bounded amount of stderr for error display. Invalid stdout or worker startup
 failure becomes a visible engine error rather than fake data.
 
@@ -361,7 +411,7 @@ The HTTP routes are:
 | `GET /` | Dashboard page |
 | `GET /style.css`, `/app.js` | UI files |
 | `GET /architecture.svg` | Architecture picture |
-| `GET /api/state` | Mode, error, interval, snapshot, recent records, session consumption |
+| `GET /api/state` | Mode, error, interval, snapshot, recent records, session purchases and consumption |
 | `POST /api/control` | JSON command: start, pause, or step |
 
 Assets use an explicit allowlist, so requests cannot browse arbitrary files.
@@ -396,7 +446,12 @@ calculate or alter simulation state.
 previous request completes. It renders the latest actual snapshot and builds
 the last 20 history rows with `textContent`, keeping records as text rather than
 injecting HTML. Intermediate balances come directly from the C++ `before` and
-`after_work` fields. The fixed relationship labels describe the current rules;
+`after_work` fields. The household card displays stock, target, and whether it wants to buy. The trade
+phase reports a purchase or why it was skipped: target reached, no goods, or
+insufficient cash. The history distinguishes purchased goods, stored stock, and
+actual consumption and unmet needs. Production is displayed as 10 goods
+when a batch occurs, not as 1. Wage and price labels come from C++ tick metadata,
+so changing these constants does not require editing JavaScript financial labels. The fixed relationship labels describe the current rules;
 they will need updating if the wage or price becomes configurable.
 
 `command()` posts a JSON control request, disables controls while it is pending,
@@ -405,7 +460,7 @@ worker runs; the server independently enforces that rule. Network failure shows
 Disconnected and disables commands until polling succeeds again.
 
 No page reload is needed to observe changes. Closing a browser tab does not close
-Node or its worker. UI history and observed consumption reset with the Node
+Node or its worker. UI history and observed purchases/consumption reset with the Node
 process; checkpoint state and total completed ticks survive a restart.
 
 ## 14. Build, deployment, and repository files
@@ -432,8 +487,10 @@ process; checkpoint state and total completed ticks survive a restart.
 
 `tests/integration.test.js` uses Node's built-in test runner and the real compiled
 engine. The first check runs 1,000 ticks with isolated temporary state and verifies
-cash conservation, intermediate balances, goods production/consumption, checkpoint
-resume, stalled/stocked alternatives, and invalid-state rejection.
+cash conservation, intermediate balances, goods transfers into storage, stock-target decisions, conditional batches, safe consumption, and checkpoint
+resume, stalled/stocked alternatives, and invalid-state rejection. Additional
+checks cover v1 migration, v2 stock/target persistence, zero or exceeded targets,
+large inventory, and malformed state rejection by both C++ and JavaScript.
 
 The second starts an isolated HTTP server and tests a single tick, continuous
 running, pause stability, a second step after pause, interval validation, invalid
@@ -446,11 +503,18 @@ These checks do not establish economic realism, cloud availability, durability
 after power loss, or large-scale performance. They establish that the small
 mechanism and its local controls behave as intended.
 
-## 16. A useful next change
+## 16. Next experiments with the same two entities
 
-Add a second household after deciding what the firm does when it can afford
-only one wage: choose a fixed ordering, rotate employment, or pick randomly?
-That decision introduces a real relationship and allocation rule. Keep the
-cash conservation check, update the checkpoint version if its shape changes,
-and show the new transfers on the dashboard. This is how the project can grow
-without making the initial engine difficult to understand.
+First, let the household buy enough goods to rebuild its target buffer, subject
+to cash and inventory limits. The current purchase cap of one exactly matches
+consumption, so it cannot build a buffer from zero. This would require quantities
+for purchases as well as production and updated tests/JSON.
+
+Second, explicitly model labor used by a batch and how wages are determined or
+paid between production ticks. Observe whether the household's income can sustain
+its consumption. Keep wages and sale revenue distinct from formal profit accounting.
+
+Third, track consecutive unmet needs and let persistent shortages affect the
+household's willingness or ability to work. Add one rule at a time and keep the
+money/goods accounting checks. Runtime configuration and a time-series chart of
+balances, inventory, and unmet needs would make these experiments easier to compare.

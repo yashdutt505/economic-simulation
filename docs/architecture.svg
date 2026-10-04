@@ -1,10 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="900" viewBox="0 0 1200 900" role="img" aria-labelledby="title desc">
   <title id="title">Economic Simulation — current architecture and tick flow</title>
-  <desc id="desc">Browser sends controls and polls the Node server. Node launches the C++ engine and reads JSON tick records. C++ loads and saves a checkpoint. A tick pays wages, produces one good, buys and consumes it, then saves state and reports.</desc>
+  <desc id="desc">Browser sends controls and polls the Node server. Node launches the C++ engine and reads JSON tick records. C++ loads and saves a checkpoint. A tick pays wages and produces a batch when needed, buys a good, then consumes one available stored good, then saves state and reports.</desc>
   <defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="4" orient="auto"><path d="M0 0L8 4L0 8" fill="none" stroke="#60856e" stroke-width="1.5"/></marker></defs>
   <rect width="1200" height="900" fill="#f5f6f1"/>
   <g font-family="Segoe UI,Arial,sans-serif" fill="#263c30">
-    <text x="60" y="57" font-size="12" letter-spacing="3" fill="#60856e">ECONOMIC SIMULATION / VERSION 0.1</text>
+    <text x="60" y="57" font-size="12" letter-spacing="3" fill="#60856e">ECONOMIC SIMULATION / VERSION 0.3</text>
     <text x="60" y="108" font-size="35" font-weight="600">A small engine. A visible economy.</text>
     <text x="60" y="141" font-size="15" fill="#778675">Current implementation: two entities, one good, fixed wage and price.</text>
     <text x="60" y="195" font-size="12" font-weight="600" letter-spacing="2">01 / SOFTWARE ARCHITECTURE</text>
@@ -50,18 +50,18 @@
       <rect x="920" y="608" width="220" height="165" rx="12"/>
     </g>
     <g font-size="16" font-weight="600">
-      <text x="79" y="643">1. Starting state</text><text x="366" y="643">2. Work + production</text>
-      <text x="653" y="643">3. Buy + consume</text><text x="939" y="643">4. Commit + report</text>
+      <text x="79" y="643">1. Starting state</text><text x="366" y="643">2. Conditional batch</text>
+      <text x="653" y="643">3. Buy + store</text><text x="939" y="643">4. Consume + save</text>
     </g>
     <g font-size="13" fill="#64785c">
       <text x="79" y="681">Household: 100 money</text><text x="79" y="708">Firm: 100 money</text><text x="79" y="735">Inventory: 0 goods</text>
-      <text x="366" y="681">Firm pays wage: 10</text><text x="366" y="708">Household: 110 · Firm: 90</text><text x="366" y="735">Produce 1 → Inventory: 1</text>
-      <text x="653" y="681">Household pays price: 10</text><text x="653" y="708">Household: 100 · Firm: 100</text><text x="653" y="735">Consume 1 → Inventory: 0</text>
-      <text x="939" y="681">Increment tick counter</text><text x="939" y="708">Save checkpoint</text><text x="939" y="735">Emit tick → Wait → Repeat</text>
+      <text x="366" y="681">If inventory &lt; 5: pay 10</text><text x="366" y="708">Household: 110 · Firm: 90</text><text x="366" y="735">Produce 10 → Inventory: 10</text>
+      <text x="653" y="681">If stock &lt; target: pay 12</text><text x="653" y="708">Household: 98 · Firm: 102</text><text x="653" y="735">Inventory: 9 · Stock: 1</text>
+      <text x="939" y="681">Consume 1 if stock &gt; 0</text><text x="939" y="708">Stock: 0 · Save checkpoint</text><text x="939" y="735">Report tick + unmet need</text>
     </g>
     <g stroke="#60856e" stroke-width="1.5" fill="none" marker-end="url(#arrow)"><path d="M280 689H340"/><path d="M567 689H627"/><path d="M854 689H913"/></g>
-    <text x="60" y="821" font-size="14" font-weight="600">Total money = 200 at every stage. Wage = price, so balances return to 100.</text>
-    <text x="60" y="850" font-size="12" fill="#829077">Work requires firm money ≥ 10. Purchase requires inventory &gt; 0 and household money ≥ 10.</text>
+    <text x="60" y="821" font-size="14" font-weight="600">Total money = 200. Wage arrives only on production ticks; buying and consumption may fail.</text>
+    <text x="60" y="850" font-size="12" fill="#829077">Batch requires inventory &lt; 5 and firm money ≥ 10. Buying requires inventory &gt; 0, money ≥ 12, stock &lt; needs.</text>
     <text x="60" y="875" font-size="12" fill="#829077">No banks, government, market pricing, external shocks, or cloud deployment yet.</text>
   </g>
 </svg>

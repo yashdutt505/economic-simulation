@@ -10,14 +10,16 @@ const defaultEngine = path.join(root, 'build', process.platform === 'win32' ? 'e
 function readCheckpoint(file) {
   let text;
   try { text = fs.readFileSync(file, 'utf8'); }
-  catch (error) { if (error.code === 'ENOENT') return { tick: '0', household_money: 100, firm_money: 100, inventory: 0 }; throw error; }
+  catch (error) { if (error.code === 'ENOENT') return { tick: '0', household_money: 100, firm_money: 100, inventory: 0, household_stock: 0, household_needs: 2, total_money: 200 }; throw error; }
   const parts = text.trim().split(/\s+/);
-  if (parts.length !== 5 || parts[0] !== 'economy-v1' || !parts.slice(1).every(p => /^\d+$/.test(p)))
+  const legacy = parts[0] === 'economy-v1' && parts.length === 5;
+  const current = parts[0] === 'economy-v2' && parts.length === 7;
+  if ((!legacy && !current) || !parts.slice(1).every(p => /^\d+$/.test(p)))
     throw new Error('Invalid dashboard checkpoint');
-  const [, tick, household, firm, inventory] = parts;
-  const snapshot = { tick, household_money: Number(household), firm_money: Number(firm), inventory: Number(inventory) };
+  const [, tick, household, firm, inventory, stock = '0', needs = '2'] = parts;
+  const snapshot = { tick, household_money: Number(household), firm_money: Number(firm), inventory: Number(inventory), household_stock: Number(stock), household_needs: Number(needs), total_money: Number(household) + Number(firm) };
   if (BigInt(tick) > 9223372036854775807n || snapshot.household_money > 200 || snapshot.firm_money > 200
-      || snapshot.household_money + snapshot.firm_money !== 200 || snapshot.inventory > 200)
+      || snapshot.total_money !== 200 || ![snapshot.inventory, snapshot.household_stock, snapshot.household_needs].every(Number.isSafeInteger))
     throw new Error('Invalid dashboard checkpoint');
   return snapshot;
 }
@@ -25,7 +27,7 @@ function readCheckpoint(file) {
 function createDashboard({ engine = defaultEngine, stateFile = path.join(root, 'build', 'dashboard.state') } = {}) {
   let snapshot = readCheckpoint(stateFile);
   let child = null, completion = null, busy = false, closing = false;
-  let mode = 'paused', error = null, intervalMs = 1000, observedConsumed = 0;
+  let mode = 'paused', error = null, intervalMs = 1000, observedConsumed = 0, observedPurchased = 0, observedProduced = 0, observedUnmet = 0;
   const history = [];
 
   function launch(single) {
@@ -43,10 +45,18 @@ function createDashboard({ engine = defaultEngine, stateFile = path.join(root, '
     lines.on('line', line => {
       try {
         const tick = JSON.parse(line);
-        if (typeof tick.tick !== 'string' || !tick.before || !tick.after_work)
-          throw new Error('Unexpected engine output');
+        if (typeof tick.tick !== 'string' || !tick.before || !tick.after_work || !tick.after_trade
+            || !Number.isSafeInteger(tick.household_stock) || !Number.isSafeInteger(tick.household_needs)
+            || ![0, 1].includes(tick.purchased) || ![0, 1].includes(tick.consumed)
+            || ![0, 1].includes(tick.unmet_need) || !Number.isSafeInteger(tick.produced) || tick.produced < 0
+            || !tick.after_consumption || !tick.before_consumption
+            || ![tick.wage, tick.price, tick.production_batch, tick.production_threshold].every(n => Number.isSafeInteger(n) && n > 0))
+          throw new Error('Unexpected engine output; rebuild the C++ engine for batch production and consumption');
         snapshot = tick;
         observedConsumed += tick.consumed;
+        observedPurchased += tick.purchased;
+        observedProduced += tick.produced;
+        observedUnmet += tick.unmet_need;
         history.push(tick);
         if (history.length > 200) history.shift();
       } catch (failure) {
@@ -76,7 +86,7 @@ function createDashboard({ engine = defaultEngine, stateFile = path.join(root, '
     if (child && active) { active.stop(); await active.done; }
   }
   function state() {
-    return { mode, error, interval_ms: intervalMs, snapshot, history, observed_consumed: observedConsumed };
+    return { mode, error, interval_ms: intervalMs, snapshot, history, observed_consumed: observedConsumed, observed_purchased: observedPurchased, observed_produced: observedProduced, observed_unmet: observedUnmet };
   }
   async function control(body) {
     if (busy) throw new Error('Another command is in progress');

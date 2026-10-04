@@ -149,7 +149,7 @@ select {
 }
 .metrics {
   display:grid;
-  grid-template-columns:repeat(4,1fr);
+  grid-template-columns:repeat(auto-fit,minmax(145px,1fr));
   gap:18px;
   padding:30px 0
 }
@@ -293,7 +293,7 @@ h3 {
 }
 .phases {
   display:grid;
-  grid-template-columns:repeat(3,1fr);
+  grid-template-columns:repeat(4,1fr);
   border:1px solid #dce3d5;
   border-radius:9px;
   background:#edf1e7

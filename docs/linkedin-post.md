@@ -19,6 +19,4 @@ The code is public: https://github.com/yashdutt505/economic-simulation
 
 I'll share progress as the project develops.
 
-What would you add first: another household, variable prices, or an external event?
-
 #BuildInPublic #CPP #EconomicSimulation #SoftwareDevelopment

@@ -20,47 +20,74 @@ volatile std::sig_atomic_t stopping = 0;
 void stop(int) { stopping = 1; }
 
 // Money uses integer units; this model has one household and one firm.
-struct Household { long long money = 100; };
+struct Household {
+    long long money = 100;
+    long long stock = 0;
+    long long needs = 2; // Desired stock, not consumption per tick.
+};
 struct Firm { long long money = 100; long long inventory = 0; };
+// Goods are sent as JSON numbers; keep them exact in JavaScript as well as C++.
+const long long max_goods = 9007199254740991LL;
+const long long wage = 10;
+const long long price = 12;
+const long long production_batch = 10;
+const long long production_threshold = 5;
 struct TickResult {
-    bool produced = false;
+    long long produced = 0; // Quantity, not just whether production happened.
+    bool purchased = false;
     bool consumed = false;
+    bool unmet_need = false;
     long long household_before = 0, firm_before = 0, inventory_before = 0;
     long long household_after_work = 0, firm_after_work = 0, inventory_after_work = 0;
+    long long household_stock_before_trade = 0, household_stock_after_trade = 0;
+    long long household_stock_before_consumption = 0, household_stock_after_consumption = 0;
 };
 struct Economy {
     long long tick = 0;
     Household household;
     Firm firm;
-
+    long long total_money = 200;
     TickResult step() {
         if (tick == std::numeric_limits<long long>::max())
             throw std::runtime_error("tick limit reached");
-        const long long wage = 10;
-        const long long price = 10;
         TickResult result;
         result.household_before = household.money;
         result.firm_before = firm.money;
         result.inventory_before = firm.inventory;
-        // Employment: pay for labor, then produce one unit.
-        if (firm.money >= wage) {
+        // Employment and Production
+        if (firm.money >= wage && firm.inventory < production_threshold) {
+            if (firm.inventory > max_goods - production_batch)
+                throw std::runtime_error("inventory limit reached");
             firm.money -= wage;
             household.money += wage;
-            ++firm.inventory;
-            result.produced = true;
+            firm.inventory += production_batch;
+            result.produced = production_batch;
         }
         result.household_after_work = household.money;
         result.firm_after_work = firm.money;
         result.inventory_after_work = firm.inventory;
-        // Trade: buy one unit, which is consumed immediately.
-        const bool traded = firm.inventory > 0 && household.money >= price;
+
+        result.household_stock_before_trade = household.stock;
+        // Purchase one unit only while below the desired stock. Keep it in storage.
+        const bool traded = firm.inventory > 0 && household.money >= price && household.needs > household.stock;
         if (traded) {
             household.money -= price;
             firm.money += price;
             --firm.inventory;
+            ++household.stock;
         }
+        result.purchased = traded;
+        result.household_stock_after_trade = household.stock;
+        // Consumption
+        result.household_stock_before_consumption = household.stock;
+        if (household.stock > 0) {
+            --household.stock;
+            result.consumed = true;
+        }
+        result.unmet_need = !result.consumed;
+        result.household_stock_after_consumption = household.stock;
         ++tick;
-        result.consumed = traded;
+        total_money = household.money + firm.money;
         return result;
     }
 };
@@ -77,21 +104,33 @@ void load(Economy& economy, const std::string& path) {
     std::string version, extra;
     Economy loaded;
     if (!(input >> version >> loaded.tick >> loaded.household.money
-                >> loaded.firm.money >> loaded.firm.inventory)
-        || version != "economy-v1" || (input >> extra)
+                >> loaded.firm.money >> loaded.firm.inventory))
+        throw std::runtime_error("invalid state: " + path);
+    if (version == "economy-v2") {
+        if (!(input >> loaded.household.stock >> loaded.household.needs))
+            throw std::runtime_error("invalid state: " + path);
+    } else if (version != "economy-v1") {
+        throw std::runtime_error("invalid state: " + path);
+    }
+    // V1 had no stored household goods; migrate to stock=0, needs=2.
+    if ((input >> extra)
         || loaded.tick < 0 || loaded.household.money < 0
         || loaded.household.money > 200 || loaded.firm.money < 0
         || loaded.firm.money != 200 - loaded.household.money
-        || loaded.firm.inventory < 0 || loaded.firm.inventory > 200)
+        || loaded.firm.inventory < 0 || loaded.firm.inventory > max_goods
+        || loaded.household.stock < 0 || loaded.household.stock > max_goods
+        || loaded.household.needs < 0 || loaded.household.needs > max_goods)
         throw std::runtime_error("invalid state: " + path);
+    loaded.total_money = loaded.household.money + loaded.firm.money;
     economy = loaded;
 }
 
 void save(const Economy& economy, const std::string& path) {
     const std::string temporary = path + ".tmp";
     std::ofstream output(temporary, std::ios::trunc);
-    output << "economy-v1 " << economy.tick << ' ' << economy.household.money
-           << ' ' << economy.firm.money << ' ' << economy.firm.inventory << '\n';
+    output << "economy-v2 " << economy.tick << ' ' << economy.household.money
+           << ' ' << economy.firm.money << ' ' << economy.firm.inventory
+           << ' ' << economy.household.stock << ' ' << economy.household.needs << '\n';
     output.close();
     if (!output) throw std::runtime_error("cannot write state: " + temporary);
 #ifdef _WIN32
@@ -108,22 +147,45 @@ void report(const Economy& economy, const TickResult& result, bool json) {
         std::cout << "tick=" << economy.tick
                   << " household_money=" << economy.household.money
                   << " firm_money=" << economy.firm.money
+                  << " total_money=" << economy.total_money
                   << " inventory=" << economy.firm.inventory
-                  << " consumed=" << (result.consumed ? 1 : 0) << std::endl;
+                  << " household_stock=" << economy.household.stock
+                  << " household_needs=" << economy.household.needs
+                  << " purchased=" << (result.purchased ? 1 : 0)
+                  << " produced=" << result.produced
+                  << " consumed=" << (result.consumed ? 1 : 0)
+                  << " unmet_need=" << (result.unmet_need ? 1 : 0) << std::endl;
         return;
     }
     // Tick is a string to preserve 64-bit precision in JavaScript.
     std::cout << "{\"tick\":\"" << economy.tick << "\",\"household_money\":" << economy.household.money
               << ",\"firm_money\":" << economy.firm.money
               << ",\"inventory\":" << economy.firm.inventory
-              << ",\"produced\":" << (result.produced ? 1 : 0)
+              << ",\"household_stock\":" << economy.household.stock
+              << ",\"household_needs\":" << economy.household.needs
+              << ",\"produced\":" << result.produced
+              << ",\"purchased\":" << (result.purchased ? 1 : 0)
               << ",\"consumed\":" << (result.consumed ? 1 : 0)
+              << ",\"unmet_need\":" << (result.unmet_need ? 1 : 0)
+              << ",\"wage\":" << wage << ",\"price\":" << price
+              << ",\"production_batch\":" << production_batch
+              << ",\"production_threshold\":" << production_threshold
+              << ",\"total_money\":" << economy.total_money
               << ",\"before\":{\"household_money\":" << result.household_before
               << ",\"firm_money\":" << result.firm_before
               << ",\"inventory\":" << result.inventory_before
+              << ",\"household_stock\":" << result.household_stock_before_trade
               << "},\"after_work\":{\"household_money\":" << result.household_after_work
               << ",\"firm_money\":" << result.firm_after_work
-              << ",\"inventory\":" << result.inventory_after_work << "}}" << std::endl;
+              << ",\"inventory\":" << result.inventory_after_work
+              << ",\"household_stock\":" << result.household_stock_before_trade
+              << "},\"after_trade\":{\"household_money\":" << economy.household.money
+              << ",\"firm_money\":" << economy.firm.money
+              << ",\"inventory\":" << economy.firm.inventory
+              << ",\"household_stock\":" << result.household_stock_after_trade
+              << "},\"after_consumption\":{\"household_stock\":" << result.household_stock_after_consumption
+              << "},\"before_consumption\":{\"household_stock\":" << result.household_stock_before_consumption
+              << "}}" << std::endl;
 }
 
 long long number(const std::string& value) {

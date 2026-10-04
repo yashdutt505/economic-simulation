@@ -1,8 +1,11 @@
 # Economic Simulation — first version
 
 A tiny C++ engine with no third-party libraries, plus a live local dashboard. One household works for one
-firm. Each tick the firm pays 10 money units and produces one good; the household
-buys that good for 10 and consumes it. Both start with 100 money units.
+firm. Each tick, the firm produces 10 goods and pays a wage of 10 only when inventory
+is below 5 and it can afford the wage. The household buys one good for 12 when
+its stock is below `needs` (target stock, initially 2), then consumes one stored
+good if available. If stock is empty, consumption is zero and an unmet need is
+reported. Both entities start with 100 money units.
 Money is transferred, so the total stays at 200. Prices and wages are fixed;
 this is a starting mechanism, not a realistic economic forecast.
 
@@ -25,7 +28,7 @@ stopping the Node server stops its C++ worker.
 The dashboard owns `build/dashboard.state`, resumes it on restart, and displays
 real C++ tick records (including the intermediate balances after wages).
 It retains the last 200 ticks in memory and displays the last 20. Session
-consumption and the activity log reset when Node restarts; the tick counter and
+production/purchase/consumption/unmet-need counters and the activity log reset when Node restarts; the tick counter and
 entity state persist. Bindings are local only, with no login or public endpoint.
 Do not point another engine process at the dashboard's checkpoint.
 
@@ -61,7 +64,19 @@ For continuous execution with a checkpoint after every tick:
 
 Ctrl+C stops the engine. Restart with the same state path to resume.
 `--ticks N` runs N additional ticks. Without `--state`, every run starts fresh.
-The state file is versioned plain text, replaced via a temporary file after each
+The state file is versioned plain text. New saves use `economy-v2`:
+
+```text
+economy-v2 TICK HOUSEHOLD_MONEY FIRM_MONEY FIRM_INVENTORY HOUSEHOLD_STOCK HOUSEHOLD_NEEDS
+```
+
+Legacy `economy-v1` files still load, keeping their tick/balances/inventory and
+initializing household stock to 0 and needs to 2. They upgrade on the next saved
+tick. V1 never saved household stock, so stock from any experimental run with
+that format cannot be recovered. Total money is derived from balances, not saved
+as a redundant field. V2 continues to store the final, post-consumption stock;
+no format change is needed for this behavior update. Wage, price, batch size, and
+threshold are fixed C++ constants rather than serialized configuration. Checkpoints are replaced via a temporary file after each
 tick. Invalid state or write errors stop execution. Checkpoints are not fsynced,
 so abrupt machine or storage failure can lose recent progress. Use one process
 per state file; concurrent writers are unsupported.
@@ -92,13 +107,14 @@ npm test
 ```
 
 Integration checks run the real executable for 1,000 ticks, inspect intermediate
-transfers, verify persistence and invalid-state rejection, and exercise the local
-HTTP controls. Temporary checkpoints are isolated from dashboard state.
+transfers, verify batch thresholds, affordable buying, safe consumption, and goods/money accounting,
+validate v1 migration/v2 persistence and malformed state rejection, and exercise
+the local HTTP controls. Temporary checkpoints are isolated from dashboard state.
 
 ## Extend incrementally
 
 `Household` and `Firm` hold entity state; `Economy::step()` defines the tick's
 ordered processes. Add one behavior at a time, checking cash and inventory after
 each change. A useful next step is a configurable wage or price, followed by a
-second household. External events, multiple goods, markets, APIs, and a UI can
+household decision about how much to buy (one per tick currently prevents building a buffer when consumption is also one). External events, multiple goods, markets, APIs, and a UI can
 be expanded as the basic model grows.
