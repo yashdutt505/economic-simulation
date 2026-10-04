@@ -24,6 +24,12 @@ function render(state) {
   byId('stock').textContent = format(s.household_stock);
   byId('needs').textContent = format(s.household_needs);
   byId('demand').textContent = s.household_stock < s.household_needs ? 'Below target: will buy if affordable and available' : 'Target reached: no purchase needed';
+  byId('quote').textContent = format(s.next_price);
+  const m = s.market;
+  const labels = { waiting: 'Gathering observations', affordability: 'Lowered: buyers lack money', scarcity: 'Raised: supply is scarce', unsold_goods: 'Lowered: goods remain unsold', stable: 'Held steady', price_floor: 'At the minimum price', price_ceiling: 'At the maximum price' };
+  byId('price-decision').textContent = labels[m.last_reason];
+  byId('market-window').textContent = `${m.samples} / ${m.period} ticks toward next review · price limits ${m.min_price}–${m.max_price}`;
+  byId('market-demand').textContent = `${m.window_requested} requested · ${m.window_affordable} affordable · ${m.window_sales} sold in current window`;
   byId('run').disabled = pending || state.mode === 'running' || state.mode === 'stepping';
   byId('pause').disabled = pending || !['running', 'stepping'].includes(state.mode);
   byId('step').disabled = pending || ['running', 'stepping'].includes(state.mode);
@@ -41,9 +47,11 @@ function render(state) {
     const reason = latest.before.household_stock >= latest.household_needs ? 'Stock target reached' : latest.after_work.inventory === 0 ? 'No goods available' : 'Not enough money';
     byId('trade').textContent = `${latest.purchased ? `Payment ${latest.price} · Bought 1` : `No purchase · ${reason}`}\n${balances(latest.after_trade)}`;
     byId('consumption').textContent = `${latest.consumed ? 'Consumed 1 stored good' : 'Unmet need: no stored good to consume'}\nStock ${latest.before_consumption.household_stock} → ${latest.after_consumption.household_stock}`;
+    byId('market-observation').textContent = `Desired stock gap ${latest.market.desired} · Requested ${latest.market.requested}\nAffordable ${latest.market.affordable} · Available ${latest.market.supply} · Sold ${latest.market.sales}`;
+    byId('pricing').textContent = `This tick's quote ${latest.price} → Next quote ${latest.next_price}\n${latest.market.decision === 'waiting' ? 'Waiting for the five-tick review' : labels[latest.market.decision]}`;
     const rows = state.history.slice(-20).reverse().map(tick => {
       const row = document.createElement('tr');
-      for (const key of ['tick', 'household_money', 'firm_money', 'produced', 'purchased', 'household_stock', 'consumed', 'unmet_need', 'inventory']) {
+      for (const key of ['tick', 'household_money', 'firm_money', 'produced', 'purchased', 'household_stock', 'consumed', 'unmet_need', 'inventory', 'price', 'next_price']) {
         const cell = document.createElement('td');
         cell.textContent = format(tick[key]);
         row.append(cell);

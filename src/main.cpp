@@ -19,24 +19,68 @@ namespace {
 volatile std::sig_atomic_t stopping = 0;
 void stop(int) { stopping = 1; }
 
-// Money uses integer units; this model has one household and one firm.
+// Money uses integer units; the market observes household/firm exchanges.
 struct Household {
     long long money = 100;
     long long stock = 0;
     long long needs = 2; // Desired stock, not consumption per tick.
 };
-struct Firm { long long money = 100; long long inventory = 0; };
+struct Firm {
+    long long money = 100;
+    long long inventory = 0;
+    long long price = 12; // The firm's quote; the market supplies feedback.
+};
 // Goods are sent as JSON numbers; keep them exact in JavaScript as well as C++.
 const long long max_goods = 9007199254740991LL;
 const long long wage = 10;
-const long long price = 12;
 const long long production_batch = 10;
 const long long production_threshold = 5;
+const long long price_period = 5, min_price = 1, max_price = 30;
+
+// Reason codes are stored in checkpoints; only these fixed labels enter JSON.
+const char* price_reason(long long code) {
+    const char* labels[] = {"waiting", "affordability", "scarcity", "unsold_goods", "stable", "price_floor", "price_ceiling"};
+    return labels[code];
+}
+struct Market {
+    long long samples = 0, requested = 0, affordable = 0, sales = 0;
+    long long unsold_ticks = 0, stockout_ticks = 0, last_reason = 0;
+
+    void observe(long long demand, long long budget_demand, long long supply, bool sold) {
+        ++samples;
+        requested += demand;
+        affordable += budget_demand;
+        sales += sold ? 1 : 0;
+        if (supply > 0 && !sold) ++unsold_ticks;
+        if (budget_demand > 0 && supply == 0) ++stockout_ticks;
+    }
+
+    long long update_price(Firm& firm) {
+        if (samples < price_period) return 0;
+        long long direction = 0;
+        last_reason = 4;
+        // Unsold supply with cash-constrained buyers: raising prices would worsen it.
+        if (requested > affordable && firm.inventory > 0) {
+            direction = -1; last_reason = 1;
+        } else if (stockout_ticks > 0 || (sales > 0 && firm.inventory < production_threshold)) {
+            direction = 1; last_reason = 2;
+        } else if (unsold_ticks > 0) {
+            direction = -1; last_reason = 3;
+        }
+        if (direction < 0 && firm.price == min_price) last_reason = 5;
+        else if (direction > 0 && firm.price == max_price) last_reason = 6;
+        else firm.price += direction;
+        samples = requested = affordable = sales = unsold_ticks = stockout_ticks = 0;
+        return last_reason;
+    }
+};
 struct TickResult {
     long long produced = 0; // Quantity, not just whether production happened.
     bool purchased = false;
     bool consumed = false;
     bool unmet_need = false;
+    long long trade_price = 0, price_decision = 0;
+    long long desired_goods = 0, requested_goods = 0, affordable_goods = 0, offered_goods = 0;
     long long household_before = 0, firm_before = 0, inventory_before = 0;
     long long household_after_work = 0, firm_after_work = 0, inventory_after_work = 0;
     long long household_stock_before_trade = 0, household_stock_after_trade = 0;
@@ -46,6 +90,7 @@ struct Economy {
     long long tick = 0;
     Household household;
     Firm firm;
+    Market market;
     long long total_money = 200;
     TickResult step() {
         if (tick == std::numeric_limits<long long>::max())
@@ -68,11 +113,16 @@ struct Economy {
         result.inventory_after_work = firm.inventory;
 
         result.household_stock_before_trade = household.stock;
+        result.trade_price = firm.price;
+        result.desired_goods = household.needs > household.stock ? household.needs - household.stock : 0;
+        result.requested_goods = result.desired_goods > 0 ? 1 : 0;
+        result.affordable_goods = result.requested_goods && household.money >= firm.price ? 1 : 0;
+        result.offered_goods = firm.inventory;
         // Purchase one unit only while below the desired stock. Keep it in storage.
-        const bool traded = firm.inventory > 0 && household.money >= price && household.needs > household.stock;
+        const bool traded = result.offered_goods > 0 && result.affordable_goods > 0;
         if (traded) {
-            household.money -= price;
-            firm.money += price;
+            household.money -= result.trade_price;
+            firm.money += result.trade_price;
             --firm.inventory;
             ++household.stock;
         }
@@ -86,6 +136,9 @@ struct Economy {
         }
         result.unmet_need = !result.consumed;
         result.household_stock_after_consumption = household.stock;
+        market.observe(result.requested_goods, result.affordable_goods, result.offered_goods, traded);
+        // The current tick uses the old quote; the adjusted quote applies next tick.
+        result.price_decision = market.update_price(firm);
         ++tick;
         total_money = household.money + firm.money;
         return result;
@@ -106,11 +159,17 @@ void load(Economy& economy, const std::string& path) {
     if (!(input >> version >> loaded.tick >> loaded.household.money
                 >> loaded.firm.money >> loaded.firm.inventory))
         throw std::runtime_error("invalid state: " + path);
-    if (version == "economy-v2") {
+    if (version == "economy-v2" || version == "economy-v3") {
         if (!(input >> loaded.household.stock >> loaded.household.needs))
             throw std::runtime_error("invalid state: " + path);
     } else if (version != "economy-v1") {
         throw std::runtime_error("invalid state: " + path);
+    }
+    if (version == "economy-v3") {
+        if (!(input >> loaded.firm.price >> loaded.market.samples >> loaded.market.requested
+              >> loaded.market.affordable >> loaded.market.sales >> loaded.market.unsold_ticks
+              >> loaded.market.stockout_ticks >> loaded.market.last_reason))
+            throw std::runtime_error("invalid market state: " + path);
     }
     // V1 had no stored household goods; migrate to stock=0, needs=2.
     if ((input >> extra)
@@ -119,7 +178,15 @@ void load(Economy& economy, const std::string& path) {
         || loaded.firm.money != 200 - loaded.household.money
         || loaded.firm.inventory < 0 || loaded.firm.inventory > max_goods
         || loaded.household.stock < 0 || loaded.household.stock > max_goods
-        || loaded.household.needs < 0 || loaded.household.needs > max_goods)
+        || loaded.household.needs < 0 || loaded.household.needs > max_goods
+        || loaded.firm.price < min_price || loaded.firm.price > max_price
+        || loaded.market.samples < 0 || loaded.market.samples >= price_period
+        || loaded.market.requested < 0 || loaded.market.requested > loaded.market.samples
+        || loaded.market.affordable < 0 || loaded.market.affordable > loaded.market.requested
+        || loaded.market.sales < 0 || loaded.market.sales > loaded.market.affordable
+        || loaded.market.unsold_ticks < 0 || loaded.market.unsold_ticks > loaded.market.samples
+        || loaded.market.stockout_ticks < 0 || loaded.market.stockout_ticks > loaded.market.affordable - loaded.market.sales
+        || loaded.market.last_reason < 0 || loaded.market.last_reason > 6)
         throw std::runtime_error("invalid state: " + path);
     loaded.total_money = loaded.household.money + loaded.firm.money;
     economy = loaded;
@@ -128,9 +195,13 @@ void load(Economy& economy, const std::string& path) {
 void save(const Economy& economy, const std::string& path) {
     const std::string temporary = path + ".tmp";
     std::ofstream output(temporary, std::ios::trunc);
-    output << "economy-v2 " << economy.tick << ' ' << economy.household.money
+    output << "economy-v3 " << economy.tick << ' ' << economy.household.money
            << ' ' << economy.firm.money << ' ' << economy.firm.inventory
-           << ' ' << economy.household.stock << ' ' << economy.household.needs << '\n';
+           << ' ' << economy.household.stock << ' ' << economy.household.needs
+           << ' ' << economy.firm.price << ' ' << economy.market.samples
+           << ' ' << economy.market.requested << ' ' << economy.market.affordable
+           << ' ' << economy.market.sales << ' ' << economy.market.unsold_ticks
+           << ' ' << economy.market.stockout_ticks << ' ' << economy.market.last_reason << '\n';
     output.close();
     if (!output) throw std::runtime_error("cannot write state: " + temporary);
 #ifdef _WIN32
@@ -154,7 +225,10 @@ void report(const Economy& economy, const TickResult& result, bool json) {
                   << " purchased=" << (result.purchased ? 1 : 0)
                   << " produced=" << result.produced
                   << " consumed=" << (result.consumed ? 1 : 0)
-                  << " unmet_need=" << (result.unmet_need ? 1 : 0) << std::endl;
+                  << " unmet_need=" << (result.unmet_need ? 1 : 0)
+                  << " price=" << result.trade_price << " next_price=" << economy.firm.price
+                  << " requested=" << result.requested_goods << " affordable=" << result.affordable_goods
+                  << " price_reason=" << price_reason(result.price_decision) << std::endl;
         return;
     }
     // Tick is a string to preserve 64-bit precision in JavaScript.
@@ -167,7 +241,24 @@ void report(const Economy& economy, const TickResult& result, bool json) {
               << ",\"purchased\":" << (result.purchased ? 1 : 0)
               << ",\"consumed\":" << (result.consumed ? 1 : 0)
               << ",\"unmet_need\":" << (result.unmet_need ? 1 : 0)
-              << ",\"wage\":" << wage << ",\"price\":" << price
+              << ",\"wage\":" << wage << ",\"price\":" << result.trade_price
+              << ",\"next_price\":" << economy.firm.price
+              << ",\"market\":{\"desired\":" << result.desired_goods
+              << ",\"requested\":" << result.requested_goods
+              << ",\"affordable\":" << result.affordable_goods
+              << ",\"supply\":" << result.offered_goods
+              << ",\"sales\":" << (result.purchased ? 1 : 0)
+              << ",\"unfilled\":" << result.requested_goods - (result.purchased ? 1 : 0)
+              << ",\"samples\":" << economy.market.samples
+              << ",\"window_requested\":" << economy.market.requested
+              << ",\"window_affordable\":" << economy.market.affordable
+              << ",\"window_sales\":" << economy.market.sales
+              << ",\"window_unsold\":" << economy.market.unsold_ticks
+              << ",\"window_stockouts\":" << economy.market.stockout_ticks
+              << ",\"last_reason\":\"" << price_reason(economy.market.last_reason)
+              << "\",\"decision\":\"" << price_reason(result.price_decision)
+              << "\",\"period\":" << price_period << ",\"min_price\":" << min_price
+              << ",\"max_price\":" << max_price << "}"
               << ",\"production_batch\":" << production_batch
               << ",\"production_threshold\":" << production_threshold
               << ",\"total_money\":" << economy.total_money

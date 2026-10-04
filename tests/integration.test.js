@@ -29,8 +29,13 @@ test('batch production, consumption, cash and goods accounting over 1000 ticks',
       assert.equal(tick.inventory + tick.household_stock,
         tick.before.inventory + tick.before.household_stock + tick.produced - tick.consumed);
       const wagePaid = tick.produced > 0 ? 10 : 0;
-      assert.equal(tick.household_money, tick.before.household_money + wagePaid - 12 * tick.purchased);
-      assert.equal(tick.firm_money, tick.before.firm_money - wagePaid + 12 * tick.purchased);
+      assert.equal(tick.household_money, tick.before.household_money + wagePaid - tick.price * tick.purchased);
+      assert.equal(tick.firm_money, tick.before.firm_money - wagePaid + tick.price * tick.purchased);
+      assert.ok(tick.price >= 1 && tick.price <= 30);
+      assert.ok(Math.abs(tick.next_price - tick.price) <= 1);
+      assert.equal(tick.market.sales, tick.purchased);
+      assert.ok(tick.market.sales <= tick.market.affordable && tick.market.affordable <= tick.market.requested);
+      assert.equal(tick.market.unfilled, tick.market.requested - tick.market.sales);
       if (tick.produced) assert.ok(tick.before.inventory < 5 && tick.before.firm_money >= 10);
       if (tick.purchased) assert.ok(tick.before.household_stock < tick.household_needs);
       purchases += tick.purchased;
@@ -49,7 +54,8 @@ test('batch production, consumption, cash and goods accounting over 1000 ticks',
     assert.equal(ticks.at(-1).firm_money, 200);
     assert.equal(ticks.at(-1).household_money, 0);
     assert.equal(ticks.at(-1).inventory, 10);
-    assert.match(fs.readFileSync(file, 'utf8'), /^economy-v2 1000 0 200 10 0 2\s*$/);
+    assert.match(fs.readFileSync(file, 'utf8'), /^economy-v3 1000 0 200 10 0 2 /);
+    assert.equal(readCheckpoint(file).next_price, 1);
     assert.equal(run(['--ticks', '1', '--interval-ms', '0', '--state', file, '--json'])[0].tick, '1001');
     fs.writeFileSync(file, 'economy-v1 1001 200 0 0\n');
     const stalled = run(['--ticks', '1', '--interval-ms', '0', '--state', file, '--json'])[0];
@@ -102,7 +108,7 @@ test('v2 preserves stock and needs; v1 migrates; malformed checkpoints are rejec
     assert.equal(migrated.before.household_money, 150);
     assert.equal(migrated.before.inventory, 3);
     assert.equal(migrated.household_stock, 0);
-    assert.match(fs.readFileSync(file, 'utf8'), /^economy-v2 /);
+    assert.match(fs.readFileSync(file, 'utf8'), /^economy-v3 /);
     // Inventory can legitimately exceed the old arbitrary limit of 200.
     fs.writeFileSync(file, 'economy-v2 0 100 100 200 2 2\n');
     const overstocked = run(['--ticks', '1', '--interval-ms', '0', '--state', file, '--json'])[0];
@@ -122,6 +128,55 @@ test('v2 preserves stock and needs; v1 migrates; malformed checkpoints are rejec
       assert.throws(() => run(['--ticks', '1', '--state', file, '--json']), invalid);
       assert.equal(fs.readFileSync(file, 'utf8'), invalid);
     }
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('market lowers unaffordable/unsold quotes, raises scarce quotes, and respects bounds', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'economy-market-test-'));
+  const file = path.join(dir, 'test.state');
+  try {
+    const scenarios = [
+      ['0 200 10 0 2 12 4 4 0 0 4 0 0', 11, 'affordability'],
+      ['0 200 10 0 2 1 4 4 0 0 4 0 0', 1, 'price_floor'],
+      ['200 0 0 0 2 12 4 4 4 0 0 4 0', 13, 'scarcity'],
+      ['200 0 0 0 2 30 4 4 4 0 0 4 0', 30, 'price_ceiling'],
+      ['100 100 10 2 2 12 4 0 0 0 4 0 0', 11, 'unsold_goods'],
+      ['100 100 9 0 2 12 4 4 4 4 0 0 0', 12, 'stable']
+    ];
+    for (const [fields, quote, reason] of scenarios) {
+      fs.writeFileSync(file, `economy-v3 4 ${fields}\n`);
+      const tick = run(['--ticks', '1', '--interval-ms', '0', '--state', file, '--json'])[0];
+      assert.equal(tick.next_price, quote, reason);
+      assert.equal(tick.market.decision, reason);
+      assert.equal(tick.market.samples, 0);
+      assert.equal(readCheckpoint(file).next_price, quote);
+      assert.equal(readCheckpoint(file).market.last_reason, reason);
+    }
+    for (const fields of [
+      '100 100 0 0 2 0 0 0 0 0 0 0 0', // price out of bounds
+      '100 100 0 0 2 31 0 0 0 0 0 0 0',
+      '100 100 0 0 2 12 5 0 0 0 0 0 0', // completed window cannot be saved
+      '100 100 0 0 2 12 1 0 1 0 0 0 0', // affordable exceeds requested
+      '100 100 0 0 2 12 1 1 0 1 0 0 0', // sales exceed affordable
+      '100 100 0 0 2 12 1 1 1 1 0 1 0', // stockout inconsistent with sales
+      '100 100 0 0 2 12 0 0 0 0 0 0 7' // unknown reason
+    ]) {
+      fs.writeFileSync(file, `economy-v3 0 ${fields}\n`);
+      assert.throws(() => readCheckpoint(file));
+      assert.throws(() => run(['--ticks', '1', '--state', file, '--json']));
+    }
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('restart mid-window preserves the exact market and pricing trajectory', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'economy-resume-test-'));
+  const file = path.join(dir, 'test.state');
+  try {
+    const uninterrupted = run(['--ticks', '80', '--interval-ms', '0', '--json']);
+    const first = run(['--ticks', '13', '--interval-ms', '0', '--state', file, '--json']);
+    assert.equal(readCheckpoint(file).market.samples, 3);
+    const second = run(['--ticks', '67', '--interval-ms', '0', '--state', file, '--json']);
+    assert.deepEqual([...first, ...second], uninterrupted);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -148,6 +203,10 @@ test('dashboard controls real C++ ticks, pauses, and reloads committed state', a
     assert.equal(stepped.state.observed_produced, 10);
     assert.equal(stepped.state.observed_purchased, 1);
     assert.equal(stepped.state.observed_consumed, 1);
+    assert.equal(stepped.state.snapshot.market.requested, 1);
+    assert.equal(stepped.state.snapshot.market.affordable, 1);
+    assert.equal(stepped.state.snapshot.market.sales, 1);
+    assert.equal(stepped.state.snapshot.next_price, 12);
     assert.equal((await command({ action: 'start', interval_ms: 0 })).code, 400);
     assert.equal((await command({ action: 'start', interval_ms: 100 })).code, 200);
     const deadline = Date.now() + 5000;
@@ -171,6 +230,8 @@ test('dashboard controls real C++ ticks, pauses, and reloads committed state', a
     assert.equal(restarted.state().snapshot.household_stock, 0);
     assert.equal(restarted.state().snapshot.household_needs, 2);
     assert.equal(restarted.state().snapshot.total_money, 200);
+    assert.equal(restarted.state().snapshot.next_price, again.state.snapshot.next_price);
+    assert.equal(restarted.state().snapshot.market.samples, again.state.snapshot.market.samples);
     assert.equal(restarted.state().history.length, 0);
     await restarted.close();
   } finally { await dashboard.close(); fs.rmSync(dir, { recursive: true, force: true }); }

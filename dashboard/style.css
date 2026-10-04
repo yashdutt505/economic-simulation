@@ -288,12 +288,16 @@ h3 {
   font-size:19px;
   color:#729169
 }
+.market {
+  margin-top:22px;
+  background:#eef2e8;
+}
 .tick-section {
   margin-top:35px
 }
 .phases {
   display:grid;
-  grid-template-columns:repeat(4,1fr);
+  grid-template-columns:repeat(5,1fr);
   border:1px solid #dce3d5;
   border-radius:9px;
   background:#edf1e7

@@ -6,22 +6,34 @@ const readline = require('node:readline');
 
 const root = path.resolve(__dirname, '..');
 const defaultEngine = path.join(root, 'build', process.platform === 'win32' ? 'economy.exe' : 'economy');
+const priceReasons = ['waiting', 'affordability', 'scarcity', 'unsold_goods', 'stable', 'price_floor', 'price_ceiling'];
+function marketSnapshot(fields = ['12', '0', '0', '0', '0', '0', '0', '0']) {
+  const [next_price, samples, window_requested, window_affordable, window_sales, window_unsold, window_stockouts, reason] = fields.map(Number);
+  if (!fields.every(p => /^\d+$/.test(p)) || next_price < 1 || next_price > 30
+      || !Number.isInteger(samples) || samples < 0 || samples >= 5
+      || window_requested > samples || window_affordable > window_requested || window_sales > window_affordable
+      || window_unsold > samples || window_stockouts > window_affordable - window_sales
+      || !Number.isInteger(reason) || reason < 0 || reason >= priceReasons.length)
+    throw new Error('Invalid market checkpoint');
+  return { next_price, market: { samples, window_requested, window_affordable, window_sales, window_unsold, window_stockouts, last_reason: priceReasons[reason], period: 5, min_price: 1, max_price: 30 } };
+}
 
 function readCheckpoint(file) {
   let text;
   try { text = fs.readFileSync(file, 'utf8'); }
-  catch (error) { if (error.code === 'ENOENT') return { tick: '0', household_money: 100, firm_money: 100, inventory: 0, household_stock: 0, household_needs: 2, total_money: 200 }; throw error; }
+  catch (error) { if (error.code === 'ENOENT') return { tick: '0', household_money: 100, firm_money: 100, inventory: 0, household_stock: 0, household_needs: 2, total_money: 200, ...marketSnapshot() }; throw error; }
   const parts = text.trim().split(/\s+/);
   const legacy = parts[0] === 'economy-v1' && parts.length === 5;
   const current = parts[0] === 'economy-v2' && parts.length === 7;
-  if ((!legacy && !current) || !parts.slice(1).every(p => /^\d+$/.test(p)))
+  const marketVersion = parts[0] === 'economy-v3' && parts.length === 15;
+  if ((!legacy && !current && !marketVersion) || !parts.slice(1).every(p => /^\d+$/.test(p)))
     throw new Error('Invalid dashboard checkpoint');
   const [, tick, household, firm, inventory, stock = '0', needs = '2'] = parts;
   const snapshot = { tick, household_money: Number(household), firm_money: Number(firm), inventory: Number(inventory), household_stock: Number(stock), household_needs: Number(needs), total_money: Number(household) + Number(firm) };
   if (BigInt(tick) > 9223372036854775807n || snapshot.household_money > 200 || snapshot.firm_money > 200
       || snapshot.total_money !== 200 || ![snapshot.inventory, snapshot.household_stock, snapshot.household_needs].every(Number.isSafeInteger))
     throw new Error('Invalid dashboard checkpoint');
-  return snapshot;
+  return { ...snapshot, ...marketSnapshot(marketVersion ? parts.slice(7) : undefined) };
 }
 
 function createDashboard({ engine = defaultEngine, stateFile = path.join(root, 'build', 'dashboard.state') } = {}) {
@@ -50,8 +62,10 @@ function createDashboard({ engine = defaultEngine, stateFile = path.join(root, '
             || ![0, 1].includes(tick.purchased) || ![0, 1].includes(tick.consumed)
             || ![0, 1].includes(tick.unmet_need) || !Number.isSafeInteger(tick.produced) || tick.produced < 0
             || !tick.after_consumption || !tick.before_consumption
-            || ![tick.wage, tick.price, tick.production_batch, tick.production_threshold].every(n => Number.isSafeInteger(n) && n > 0))
-          throw new Error('Unexpected engine output; rebuild the C++ engine for batch production and consumption');
+            || ![tick.wage, tick.price, tick.production_batch, tick.production_threshold].every(n => Number.isSafeInteger(n) && n > 0)
+            || !tick.market || !Number.isInteger(tick.next_price) || tick.next_price < 1 || tick.next_price > 30
+            || !priceReasons.includes(tick.market.decision))
+          throw new Error('Unexpected engine output; rebuild the C++ engine for the market model');
         snapshot = tick;
         observedConsumed += tick.consumed;
         observedPurchased += tick.purchased;
@@ -72,7 +86,10 @@ function createDashboard({ engine = defaultEngine, stateFile = path.join(root, '
         child = null;
         if (!stopped && code !== 0 && !error) error = stderr.trim() || `Engine exited with code ${code}`;
         // On Windows termination may happen after save but before stdout; reread committed state.
-        try { snapshot = { ...snapshot, ...readCheckpoint(stateFile) }; }
+        try {
+          const committed = readCheckpoint(stateFile);
+          snapshot = { ...snapshot, ...committed, market: { ...snapshot.market, ...committed.market } };
+        }
         catch (failure) { error = failure.message; }
         mode = error ? 'error' : 'paused';
         resolve();

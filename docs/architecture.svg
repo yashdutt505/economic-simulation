@@ -1,12 +1,12 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="900" viewBox="0 0 1200 900" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1170" viewBox="0 0 1200 1170" role="img" aria-labelledby="title desc">
   <title id="title">Economic Simulation — current architecture and tick flow</title>
-  <desc id="desc">Browser sends controls and polls the Node server. Node launches the C++ engine and reads JSON tick records. C++ loads and saves a checkpoint. A tick pays wages and produces a batch when needed, buys a good, then consumes one available stored good, then saves state and reports.</desc>
+  <desc id="desc">Browser sends controls and polls the Node server. Node launches the C++ engine and reads JSON tick records. C++ loads and saves a checkpoint. A tick produces, buys, consumes, observes market demand and sales, reviews the price every five ticks, then saves and reports.</desc>
   <defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="4" orient="auto"><path d="M0 0L8 4L0 8" fill="none" stroke="#60856e" stroke-width="1.5"/></marker></defs>
-  <rect width="1200" height="900" fill="#f5f6f1"/>
+  <rect width="1200" height="1170" fill="#f5f6f1"/>
   <g font-family="Segoe UI,Arial,sans-serif" fill="#263c30">
-    <text x="60" y="57" font-size="12" letter-spacing="3" fill="#60856e">ECONOMIC SIMULATION / VERSION 0.3</text>
+    <text x="60" y="57" font-size="12" letter-spacing="3" fill="#60856e">ECONOMIC SIMULATION / VERSION 0.4</text>
     <text x="60" y="108" font-size="35" font-weight="600">A small engine. A visible economy.</text>
-    <text x="60" y="141" font-size="15" fill="#778675">Current implementation: two entities, one good, fixed wage and price.</text>
+    <text x="60" y="141" font-size="15" fill="#778675">Three entities, one good, fixed wage, and a firm quote informed by market feedback.</text>
     <text x="60" y="195" font-size="12" font-weight="600" letter-spacing="2">01 / SOFTWARE ARCHITECTURE</text>
     <g fill="#fff" stroke="#d2ddce" stroke-width="1.5">
       <rect x="60" y="222" width="285" height="140" rx="12"/>
@@ -27,7 +27,7 @@
     <text x="872" y="313" font-size="13" fill="#71826b">Own entity state + execute rules</text>
     <text x="872" y="337" font-size="13" fill="#71826b">Save first, then emit a JSON tick</text>
     <text x="872" y="442" font-size="18" font-weight="600">Checkpoint file</text>
-    <text x="872" y="472" font-size="13" fill="#71826b">Load on start · Replace after each tick</text>
+    <text x="872" y="472" font-size="13" fill="#71826b">V3: entity state + quote + review window</text>
     <g stroke="#60856e" stroke-width="1.5" fill="none" marker-end="url(#arrow)">
       <path d="M345 269H451"/><path d="M455 319H349"/>
       <path d="M740 269H846"/><path d="M850 319H744"/>
@@ -51,17 +51,26 @@
     </g>
     <g font-size="16" font-weight="600">
       <text x="79" y="643">1. Starting state</text><text x="366" y="643">2. Conditional batch</text>
-      <text x="653" y="643">3. Buy + store</text><text x="939" y="643">4. Consume + save</text>
+      <text x="653" y="643">3. Buy + store</text><text x="939" y="643">4. Consume + review</text>
     </g>
     <g font-size="13" fill="#64785c">
       <text x="79" y="681">Household: 100 money</text><text x="79" y="708">Firm: 100 money</text><text x="79" y="735">Inventory: 0 goods</text>
       <text x="366" y="681">If inventory &lt; 5: pay 10</text><text x="366" y="708">Household: 110 · Firm: 90</text><text x="366" y="735">Produce 10 → Inventory: 10</text>
       <text x="653" y="681">If stock &lt; target: pay 12</text><text x="653" y="708">Household: 98 · Firm: 102</text><text x="653" y="735">Inventory: 9 · Stock: 1</text>
-      <text x="939" y="681">Consume 1 if stock &gt; 0</text><text x="939" y="708">Stock: 0 · Save checkpoint</text><text x="939" y="735">Report tick + unmet need</text>
+      <text x="939" y="681">Consume 1 if stock &gt; 0</text><text x="939" y="708">Stock: 0 · Observe market</text><text x="939" y="735">Review quote → Save + report</text>
     </g>
     <g stroke="#60856e" stroke-width="1.5" fill="none" marker-end="url(#arrow)"><path d="M280 689H340"/><path d="M567 689H627"/><path d="M854 689H913"/></g>
     <text x="60" y="821" font-size="14" font-weight="600">Total money = 200. Wage arrives only on production ticks; buying and consumption may fail.</text>
-    <text x="60" y="850" font-size="12" fill="#829077">Batch requires inventory &lt; 5 and firm money ≥ 10. Buying requires inventory &gt; 0, money ≥ 12, stock &lt; needs.</text>
-    <text x="60" y="875" font-size="12" fill="#829077">No banks, government, market pricing, external shocks, or cloud deployment yet.</text>
+    <text x="60" y="850" font-size="12" fill="#829077">Batch requires inventory &lt; 5 and firm money ≥ 10. Buying requires inventory &gt; 0, money ≥ quote, stock &lt; needs.</text>
+    <text x="60" y="875" font-size="12" fill="#829077">Prices begin at 12. Reviews apply next tick. The first-tick example above uses the initial quote.</text>
+    <text x="60" y="920" font-size="12" font-weight="600" letter-spacing="2">03 / MARKET FEEDBACK LOOP</text>
+    <g fill="#edf1e7" stroke="#d2ddce"><rect x="60" y="940" width="285" height="120" rx="12"/><rect x="455" y="940" width="285" height="120" rx="12"/><rect x="850" y="940" width="290" height="120" rx="12"/></g>
+    <g font-size="19" font-weight="600"><text x="82" y="973">Household</text><text x="477" y="973">Market</text><text x="872" y="973">Firm</text></g>
+    <g font-size="13" fill="#64785c"><text x="82" y="1001">Stock target → requested demand</text><text x="82" y="1026">Cash + quote → affordable demand</text><text x="477" y="1001">Requests, budget, supply, sales</text><text x="477" y="1026">Review every five observations</text><text x="872" y="1001">Offers inventory and owns quote</text><text x="872" y="1026">Moves quote ±1 within 1–30</text></g>
+    <g stroke="#60856e" stroke-width="1.5" fill="none" marker-end="url(#arrow)"><path d="M345 990H450"/><path d="M850 990H745"/><path d="M740 1040H845"/></g>
+    <g font-size="11" fill="#60856e"><text x="365" y="979">demand</text><text x="758" y="979">supply / sales</text><text x="759" y="1056">price feedback</text></g>
+    <text x="60" y="1100" font-size="14" font-weight="600">Affordability or unsold goods → lower quote. Scarcity → raise quote. Otherwise hold.</text>
+    <text x="60" y="1130" font-size="12" fill="#829077">Market holds information. Household and firm still exchange money and goods directly.</text>
+    <text x="60" y="1153" font-size="12" fill="#829077">Price adjustment cannot restore purchasing power when household cash is zero; wage timing is the next experiment.</text>
   </g>
 </svg>

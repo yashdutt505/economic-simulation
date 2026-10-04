@@ -1,13 +1,18 @@
-# Economic Simulation — first version
+# Economic Simulation — household, firm, and market
 
 A tiny C++ engine with no third-party libraries, plus a live local dashboard. One household works for one
 firm. Each tick, the firm produces 10 goods and pays a wage of 10 only when inventory
-is below 5 and it can afford the wage. The household buys one good for 12 when
+is below 5 and it can afford the wage. The household buys one good at the current quote when
 its stock is below `needs` (target stock, initially 2), then consumes one stored
 good if available. If stock is empty, consumption is zero and an unmet need is
 reported. Both entities start with 100 money units.
-Money is transferred, so the total stays at 200. Prices and wages are fixed;
+Money is transferred, so the total stays at 200. Wages remain fixed, while the firm adjusts its price using market feedback;
 this is a starting mechanism, not a realistic economic forecast.
+
+The market records requested demand, affordable demand, offered inventory, and
+sales. The firm starts at price 12 and reviews five ticks of feedback at a time.
+Prices move by at most one unit and stay between 1 and 30. The market holds no
+money or inventory. See [the market rules and examples](docs/market.md).
 
 ![Architecture and tick flow](docs/architecture.svg)
 
@@ -64,19 +69,19 @@ For continuous execution with a checkpoint after every tick:
 
 Ctrl+C stops the engine. Restart with the same state path to resume.
 `--ticks N` runs N additional ticks. Without `--state`, every run starts fresh.
-The state file is versioned plain text. New saves use `economy-v2`:
+The state file is versioned plain text. New saves use `economy-v3`:
 
 ```text
-economy-v2 TICK HOUSEHOLD_MONEY FIRM_MONEY FIRM_INVENTORY HOUSEHOLD_STOCK HOUSEHOLD_NEEDS
+economy-v3 TICK HOUSEHOLD_MONEY FIRM_MONEY FIRM_INVENTORY HOUSEHOLD_STOCK HOUSEHOLD_NEEDS PRICE SAMPLES REQUESTED AFFORDABLE SALES UNSOLD_TICKS STOCKOUT_TICKS REASON
 ```
 
 Legacy `economy-v1` files still load, keeping their tick/balances/inventory and
-initializing household stock to 0 and needs to 2. They upgrade on the next saved
-tick. V1 never saved household stock, so stock from any experimental run with
+initializing household stock to 0 and needs to 2. Both v1 and v2 upgrade on the next saved tick. V2 preserves household stock and
+needs. Older files initialize the firm quote to 12 and the market window to empty. V1 never saved household stock, so stock from any experimental run with
 that format cannot be recovered. Total money is derived from balances, not saved
-as a redundant field. V2 continues to store the final, post-consumption stock;
-no format change is needed for this behavior update. Wage, price, batch size, and
-threshold are fixed C++ constants rather than serialized configuration. Checkpoints are replaced via a temporary file after each
+as a redundant field. V3 stores post-consumption stock, the next quote, and all partial-window counts,
+so restarting midway through a price review preserves the trajectory. Wage, batch
+size, threshold, and pricing-policy bounds remain fixed C++ constants. Checkpoints are replaced via a temporary file after each
 tick. Invalid state or write errors stop execution. Checkpoints are not fsynced,
 so abrupt machine or storage failure can lose recent progress. Use one process
 per state file; concurrent writers are unsupported.
@@ -108,13 +113,13 @@ npm test
 
 Integration checks run the real executable for 1,000 ticks, inspect intermediate
 transfers, verify batch thresholds, affordable buying, safe consumption, and goods/money accounting,
-validate v1 migration/v2 persistence and malformed state rejection, and exercise
+validate v1/v2 migration and v3 market persistence and malformed state rejection, and exercise
 the local HTTP controls. Temporary checkpoints are isolated from dashboard state.
 
 ## Extend incrementally
 
-`Household` and `Firm` hold entity state; `Economy::step()` defines the tick's
-ordered processes. Add one behavior at a time, checking cash and inventory after
-each change. A useful next step is a configurable wage or price, followed by a
-household decision about how much to buy (one per tick currently prevents building a buffer when consumption is also one). External events, multiple goods, markets, APIs, and a UI can
-be expanded as the basic model grows.
+Household, Firm, and Market hold persistent state; Economy::step() defines the
+ordered processes. Next, let the household buy enough to rebuild its stock buffer,
+then improve labor and wage timing so consumption has sustainable income. Keep
+the market policy small and compare requested demand, affordability, inventory,
+and unmet consumption before adding more entities.

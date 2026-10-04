@@ -1,6 +1,6 @@
 {
   "name": "economic-simulation",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "description": "A tiny C++ economy with a live localhost dashboard",
   "engines": { "node": ">=18" },
